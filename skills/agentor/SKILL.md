@@ -16,16 +16,25 @@ Use this skill when a task needs:
 ## Commands
 
 ```bash
+agentor doctor
 agentor fetch <url>
+agentor shot <url>
 agentor screenshot <url>
+agentor research <url> --prompt "research this page"
 agentor run <url> --prompt "research this page"
+agentor setup tor
+agentor test tor
 ```
 
 ## Notes
 
 - Default proxy is `socks5://127.0.0.1:9050`
+- `agentor setup tor` checks install state and SOCKS reachability
+- `agentor doctor` audits browser, Tor, port, and output directory
+- Profiles can store recurring proxy/output defaults
 - Pass `--no-proxy` for direct browsing
 - Artifacts are written under `artifacts/<timestamp>-<slug>` unless `--out` is set
+- every run also writes `summary.txt`
 - `run` writes `report.md` in addition to HTML, text, screenshot, and `receipt.json`
 
 ## Verification

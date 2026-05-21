@@ -1,13 +1,14 @@
 import fs from "node:fs/promises";
 import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright-core";
 
 export const VERSION = "0.1.0";
-const DEFAULT_PROXY = "socks5://127.0.0.1:9050";
-const DEFAULT_TIMEOUT_MS = 30_000;
-const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
+export const DEFAULT_PROXY = "socks5://127.0.0.1:9050";
+export const DEFAULT_TIMEOUT_MS = 30_000;
+export const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
 const DEFAULT_PROXY_HOST = "127.0.0.1";
 const DEFAULT_PROXY_PORT = 9050;
 const LOCAL_BROWSER_CANDIDATES = [
@@ -35,12 +36,52 @@ export function makeOutputDir(url, baseDir = "artifacts", now = new Date()) {
   return path.resolve(baseDir, `${timestampStamp(now)}-${slugifyUrl(url)}`);
 }
 
+export function getConfigPath(platform = process.platform, homeDir = os.homedir()) {
+  if (platform === "win32") {
+    const appData = process.env.APPDATA || path.join(homeDir, "AppData", "Roaming");
+    return path.join(appData, "agentor", "config.json");
+  }
+  return path.join(homeDir, ".config", "agentor", "config.json");
+}
+
+export async function loadConfig(configPath = getConfigPath()) {
+  try {
+    const raw = await fs.readFile(configPath, "utf8");
+    const parsed = JSON.parse(raw);
+    return {
+      defaultProfile: parsed.defaultProfile || null,
+      profiles: parsed.profiles || {}
+    };
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
+      return { defaultProfile: null, profiles: {} };
+    }
+    throw error;
+  }
+}
+
+export async function saveConfig(config, configPath = getConfigPath()) {
+  await fs.mkdir(path.dirname(configPath), { recursive: true });
+  await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+  return configPath;
+}
+
+export function resolveProfile(config, name) {
+  const profileName = name || config.defaultProfile;
+  if (!profileName) {
+    return null;
+  }
+  const profile = config.profiles?.[profileName];
+  if (!profile) {
+    throw new Error(`unknown profile: ${profileName}`);
+  }
+  return { name: profileName, ...profile };
+}
+
 export function parseArgs(argv) {
   const args = [...argv];
-  const result = {
-    flags: {}
-  };
-  const booleanFlags = new Set(["json", "no-proxy", "install"]);
+  const result = { flags: {} };
+  const booleanFlags = new Set(["json", "no-proxy", "install", "yes", "start"]);
   while (args.length > 0) {
     const token = args.shift();
     if (!token.startsWith("--")) {
@@ -81,47 +122,100 @@ function splitProxyAddress(proxy = DEFAULT_PROXY) {
   };
 }
 
-export function getTorSetupPlan(platform = process.platform) {
-  if (platform === "darwin") {
-    return {
-      platform,
-      packageManager: "brew",
-      installCommand: ["brew", "install", "tor"],
-      startCommands: [
-        "brew services start tor",
-        "tor"
-      ]
-    };
+function clip(value, max) {
+  return value.length <= max ? value : `${value.slice(0, max - 1)}...`;
+}
+
+export function buildReport(snapshot, prompt = "research this page") {
+  const headline = snapshot.title || snapshot.url;
+  const summary = snapshot.description || "No meta description found.";
+  const topLinks = snapshot.links.slice(0, 8).map((link) => `- ${link.text || link.href} <${link.href}>`);
+  const topHeadings = snapshot.headings.slice(0, 10).map((heading) => `- ${heading}`);
+  const topFacts = [
+    `Prompt: ${prompt}`,
+    `Title: ${headline}`,
+    `URL: ${snapshot.url}`,
+    `Description: ${summary}`,
+    `Body excerpt: ${clip(snapshot.text.replace(/\s+/g, " ").trim(), 500)}`
+  ];
+  return [
+    "# agenTOR Report",
+    "",
+    ...topFacts,
+    "",
+    "## Headings",
+    ...(topHeadings.length > 0 ? topHeadings : ["- None found"]),
+    "",
+    "## Links",
+    ...(topLinks.length > 0 ? topLinks : ["- None found"])
+  ].join("\n");
+}
+
+export function buildSummary(receipt) {
+  return [
+    `command: ${receipt.command}`,
+    `url: ${receipt.url}`,
+    `title: ${receipt.title || "(none)"}`,
+    `proxied: ${receipt.proxy ? "yes" : "no"}`,
+    `proxy: ${receipt.proxy || "(direct)"}`,
+    `artifacts: ${Object.values(receipt.artifacts).filter(Boolean).join(", ")}`,
+    `outDir: ${receipt.outDir}`
+  ].join("\n");
+}
+
+async function ensureDir(dir) {
+  await fs.mkdir(dir, { recursive: true });
+}
+
+export async function resolveBrowserLaunchOptions() {
+  for (const candidate of LOCAL_BROWSER_CANDIDATES) {
+    try {
+      await fs.access(candidate);
+      return { executablePath: candidate };
+    } catch {
+      continue;
+    }
   }
-  if (platform === "linux") {
-    return {
-      platform,
-      packageManager: "apt",
-      installCommand: ["sudo", "apt-get", "install", "-y", "tor"],
-      startCommands: [
-        "sudo systemctl start tor",
-        "tor"
-      ]
-    };
-  }
-  if (platform === "win32") {
-    return {
-      platform,
-      packageManager: "winget",
-      installCommand: ["winget", "install", "--id", "TorProject.TorBrowser", "-e"],
-      startCommands: [
-        "Start Tor Browser or run the Tor expert bundle so SOCKS is listening on 127.0.0.1:9050"
-      ]
-    };
-  }
+  return {};
+}
+
+export async function inspectBrowser() {
+  const launchOptions = await resolveBrowserLaunchOptions();
   return {
-    platform,
-    packageManager: null,
-    installCommand: null,
-    startCommands: [
-      "Install Tor manually and expose a SOCKS proxy on 127.0.0.1:9050"
-    ]
+    available: Boolean(launchOptions.executablePath),
+    executablePath: launchOptions.executablePath || null
   };
+}
+
+async function writeJson(file, value) {
+  await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
+}
+
+async function capturePage(page, url, mode, outDir) {
+  await page.goto(url, { waitUntil: "domcontentloaded" });
+  const snapshot = await page.evaluate(() => {
+    const text = document.body?.innerText || "";
+    const links = Array.from(document.querySelectorAll("a[href]")).map((anchor) => ({
+      href: anchor.href,
+      text: (anchor.textContent || "").trim().replace(/\s+/g, " ")
+    }));
+    const headings = Array.from(document.querySelectorAll("h1,h2,h3"))
+      .map((heading) => (heading.textContent || "").trim().replace(/\s+/g, " "))
+      .filter(Boolean);
+    const description = document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
+    return {
+      title: document.title || "",
+      html: document.documentElement.outerHTML,
+      text,
+      links,
+      headings,
+      description
+    };
+  });
+  if (mode === "screenshot" || mode === "run") {
+    await page.screenshot({ path: path.join(outDir, "screenshot.png") });
+  }
+  return snapshot;
 }
 
 export async function runCommand(command, args = [], options = {}) {
@@ -169,6 +263,43 @@ async function commandExists(command, commandRunner = runCommand) {
   return probe.ok;
 }
 
+export function getTorSetupPlan(platform = process.platform) {
+  if (platform === "darwin") {
+    return {
+      platform,
+      packageManager: "brew",
+      installCommand: ["brew", "install", "tor"],
+      startCommand: ["brew", "services", "start", "tor"],
+      startExamples: ["brew services start tor", "tor"]
+    };
+  }
+  if (platform === "linux") {
+    return {
+      platform,
+      packageManager: "apt",
+      installCommand: ["sudo", "apt-get", "install", "-y", "tor"],
+      startCommand: ["sudo", "systemctl", "start", "tor"],
+      startExamples: ["sudo systemctl start tor", "tor"]
+    };
+  }
+  if (platform === "win32") {
+    return {
+      platform,
+      packageManager: "winget",
+      installCommand: ["winget", "install", "--id", "TorProject.TorBrowser", "-e"],
+      startCommand: null,
+      startExamples: ["Start Tor Browser or a Tor expert bundle so SOCKS is listening on 127.0.0.1:9050"]
+    };
+  }
+  return {
+    platform,
+    packageManager: null,
+    installCommand: null,
+    startCommand: null,
+    startExamples: ["Install Tor manually and expose a SOCKS proxy on 127.0.0.1:9050"]
+  };
+}
+
 export async function inspectTorSetup({
   proxy = DEFAULT_PROXY,
   platform = process.platform,
@@ -193,12 +324,14 @@ export async function inspectTorSetup({
     packageManager: plan.packageManager,
     packageManagerAvailable,
     installCommand: plan.installCommand,
-    startCommands: plan.startCommands
+    startCommand: plan.startCommand,
+    startExamples: plan.startExamples
   };
 }
 
 export async function setupTor({
   install = false,
+  start = false,
   proxy = DEFAULT_PROXY,
   platform = process.platform,
   commandRunner = runCommand,
@@ -207,19 +340,32 @@ export async function setupTor({
   const before = await inspectTorSetup({ proxy, platform, commandRunner, portChecker });
   let installAttempted = false;
   let installResult = null;
+  let startAttempted = false;
+  let startResult = null;
   if (!before.ready && install && !before.torBinary && before.installCommand && before.packageManagerAvailable) {
     installAttempted = true;
     installResult = await commandRunner(before.installCommand[0], before.installCommand.slice(1), {
       stdio: ["inherit", "pipe", "pipe"]
     });
   }
-  const after = installAttempted
+  const mid = installAttempted
     ? await inspectTorSetup({ proxy, platform, commandRunner, portChecker })
     : before;
+  if (!mid.ready && start && mid.torBinary && mid.startCommand) {
+    startAttempted = true;
+    startResult = await commandRunner(mid.startCommand[0], mid.startCommand.slice(1), {
+      stdio: ["inherit", "pipe", "pipe"]
+    });
+  }
+  const after = startAttempted
+    ? await inspectTorSetup({ proxy, platform, commandRunner, portChecker })
+    : mid;
   return {
     ...after,
     installAttempted,
     installResult,
+    startAttempted,
+    startResult,
     nextSteps: after.ready
       ? []
       : [
@@ -231,9 +377,18 @@ export async function setupTor({
           after.torBinary && !after.portOpen
             ? `start Tor so SOCKS is listening on ${after.host}:${after.port}`
             : null,
-          ...after.startCommands.map((command) => `example: ${command}`)
+          ...after.startExamples.map((command) => `example: ${command}`)
         ].filter(Boolean)
   };
+}
+
+export async function verifyWritableDir(dir) {
+  const resolved = path.resolve(dir);
+  await fs.mkdir(resolved, { recursive: true });
+  const probe = path.join(resolved, `.agentor-write-${process.pid}-${Date.now()}`);
+  await fs.writeFile(probe, "ok\n");
+  await fs.unlink(probe);
+  return resolved;
 }
 
 export function formatRuntimeError(error, { useProxy, proxy }) {
@@ -247,95 +402,47 @@ export function formatRuntimeError(error, { useProxy, proxy }) {
   return message;
 }
 
-function clip(value, max) {
-  return value.length <= max ? value : `${value.slice(0, max - 1)}...`;
-}
-
-export function buildReport(snapshot, prompt = "research this page") {
-  const headline = snapshot.title || snapshot.url;
-  const summary = snapshot.description || "No meta description found.";
-  const topLinks = snapshot.links.slice(0, 8).map((link) => `- ${link.text || link.href} <${link.href}>`);
-  const topHeadings = snapshot.headings.slice(0, 10).map((heading) => `- ${heading}`);
-  const topFacts = [
-    `Prompt: ${prompt}`,
-    `Title: ${headline}`,
-    `URL: ${snapshot.url}`,
-    `Description: ${summary}`,
-    `Body excerpt: ${clip(snapshot.text.replace(/\s+/g, " ").trim(), 500)}`
-  ];
-  return [
-    `# agenTOR Report`,
-    ``,
-    ...topFacts,
-    ``,
-    `## Headings`,
-    ...(topHeadings.length > 0 ? topHeadings : ["- None found"]),
-    ``,
-    `## Links`,
-    ...(topLinks.length > 0 ? topLinks : ["- None found"])
-  ].join("\n");
-}
-
-async function ensureDir(dir) {
-  await fs.mkdir(dir, { recursive: true });
-}
-
-async function resolveBrowserLaunchOptions() {
-  for (const candidate of LOCAL_BROWSER_CANDIDATES) {
-    try {
-      await fs.access(candidate);
-      return { executablePath: candidate };
-    } catch {
-      continue;
-    }
-  }
-  return {};
-}
-
-async function writeJson(file, value) {
-  await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
-}
-
-async function capturePage(page, url, mode, outDir) {
-  await page.goto(url, { waitUntil: "domcontentloaded" });
-  const snapshot = await page.evaluate(() => {
-    const text = document.body?.innerText || "";
-    const links = Array.from(document.querySelectorAll("a[href]")).map((anchor) => ({
-      href: anchor.href,
-      text: (anchor.textContent || "").trim().replace(/\s+/g, " ")
-    }));
-    const headings = Array.from(document.querySelectorAll("h1,h2,h3")).map((heading) =>
-      (heading.textContent || "").trim().replace(/\s+/g, " ")
-    ).filter(Boolean);
-    const description = document.querySelector('meta[name="description"]')?.getAttribute("content") || "";
-    return {
-      title: document.title || "",
-      html: document.documentElement.outerHTML,
-      text,
-      links,
-      headings,
-      description
-    };
-  });
-  if (mode === "screenshot" || mode === "run") {
-    await page.screenshot({ path: path.join(outDir, "screenshot.png") });
-  }
-  return snapshot;
+export async function resolveRunOptions({
+  flags = {},
+  config = { defaultProfile: null, profiles: {} },
+  command
+}) {
+  const profile = resolveProfile(config, flags.profile);
+  const baseDir = flags.baseDir || profile?.baseDir || "artifacts";
+  const useProxy = flags["no-proxy"] ? false : profile?.useProxy !== false;
+  return {
+    command,
+    url: null,
+    outDir: flags.out,
+    baseDir,
+    proxy: flags.proxy || profile?.proxy || DEFAULT_PROXY,
+    useProxy,
+    timeoutMs: parseTimeout(flags.timeout ?? profile?.timeout),
+    prompt: flags.prompt || profile?.prompt,
+    browserPath: flags.browser || profile?.browserPath || null,
+    profileName: profile?.name || null
+  };
 }
 
 export async function runSession({
   command,
   url,
   outDir,
+  baseDir = "artifacts",
   proxy = DEFAULT_PROXY,
   useProxy = true,
   timeoutMs = DEFAULT_TIMEOUT_MS,
   prompt,
-  browserType = chromium
+  browserType = chromium,
+  browserPath = null,
+  profileName = null
 }) {
-  const resolvedOutDir = outDir || makeOutputDir(url);
+  const resolvedOutDir = outDir || makeOutputDir(url, baseDir);
   await ensureDir(resolvedOutDir);
-  const launchOptions = await resolveBrowserLaunchOptions();
+  const detectedLaunchOptions = await resolveBrowserLaunchOptions();
+  const launchOptions = browserPath
+    ? { executablePath: browserPath }
+    : detectedLaunchOptions;
   let browser;
   try {
     browser = await browserType.launch({
@@ -374,6 +481,7 @@ export async function runSession({
       outDir: resolvedOutDir,
       title: snapshot.title,
       description: snapshot.description,
+      profile: profileName,
       artifacts: {
         html: "page.html",
         text: "page.txt",
@@ -387,6 +495,7 @@ export async function runSession({
       }
     };
     await writeJson(path.join(resolvedOutDir, "receipt.json"), receipt);
+    await fs.writeFile(path.join(resolvedOutDir, "summary.txt"), `${buildSummary(receipt)}\n`);
     await context.close();
     return receipt;
   } finally {
@@ -394,4 +503,103 @@ export async function runSession({
       await browser.close();
     }
   }
+}
+
+export async function testTorRoute({
+  url = "https://example.com",
+  proxy = DEFAULT_PROXY,
+  timeoutMs = 15_000,
+  browserType = chromium,
+  browserPath = null
+} = {}) {
+  const browserInfo = await inspectBrowser();
+  let browser;
+  const startedAt = new Date().toISOString();
+  try {
+    browser = await browserType.launch({
+      headless: true,
+      ...(browserPath ? { executablePath: browserPath } : browserInfo.executablePath ? { executablePath: browserInfo.executablePath } : {}),
+      proxy: { server: proxy }
+    });
+    const context = await browser.newContext({ viewport: DEFAULT_VIEWPORT });
+    const page = await context.newPage();
+    page.setDefaultTimeout(timeoutMs);
+    await page.goto(url, { waitUntil: "domcontentloaded" });
+    const title = await page.title();
+    await context.close();
+    return {
+      ok: true,
+      url,
+      proxy,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      title
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      url,
+      proxy,
+      startedAt,
+      finishedAt: new Date().toISOString(),
+      error: formatRuntimeError(error, { useProxy: true, proxy })
+    };
+  } finally {
+    if (browser) {
+      await browser.close();
+    }
+  }
+}
+
+export async function runDoctor({
+  proxy = DEFAULT_PROXY,
+  baseDir = "artifacts",
+  platform = process.platform,
+  commandRunner = runCommand,
+  portChecker = isTcpPortOpen
+} = {}) {
+  const browser = await inspectBrowser();
+  const tor = await inspectTorSetup({ proxy, platform, commandRunner, portChecker });
+  let writable = { ok: true, value: path.resolve(baseDir), message: "output directory is writable" };
+  try {
+    writable.value = await verifyWritableDir(baseDir);
+  } catch (error) {
+    writable = { ok: false, value: path.resolve(baseDir), message: error.message };
+  }
+  return {
+    proxy,
+    checks: [
+      {
+        name: "browser",
+        ok: browser.available,
+        detail: browser.available ? browser.executablePath : "No local Chrome/Chromium/Brave/Edge executable found"
+      },
+      {
+        name: "tor-binary",
+        ok: tor.torBinary,
+        detail: tor.torBinary ? "tor binary available" : "tor binary not found"
+      },
+      {
+        name: "tor-socks-port",
+        ok: tor.portOpen,
+        detail: tor.portOpen ? `${tor.host}:${tor.port} reachable` : `${tor.host}:${tor.port} is not listening`
+      },
+      {
+        name: "output-dir",
+        ok: writable.ok,
+        detail: writable.ok ? writable.value : writable.message
+      }
+    ]
+  };
+}
+
+export async function openPath(targetPath, platform = process.platform, commandRunner = runCommand) {
+  const resolved = path.resolve(targetPath);
+  if (platform === "darwin") {
+    return await commandRunner("open", [resolved]);
+  }
+  if (platform === "win32") {
+    return await commandRunner("cmd", ["/c", "start", "", resolved]);
+  }
+  return await commandRunner("xdg-open", [resolved]);
 }

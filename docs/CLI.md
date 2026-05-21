@@ -1,5 +1,18 @@
 # CLI
 
+## `agentor`
+
+Prints a short first-run onboarding flow.
+
+## `agentor doctor`
+
+Runs a quick environment audit:
+
+- browser availability
+- tor binary presence
+- SOCKS port reachability
+- output directory writability
+
 ## `agentor fetch <url>`
 
 Opens the page, waits for DOM content, stores HTML/text, and writes `receipt.json`.
@@ -30,6 +43,13 @@ Example:
 agentor run https://example.com --prompt "research this page"
 ```
 
+## Aliases
+
+```bash
+agentor shot <url>
+agentor research <url> --prompt "research this page"
+```
+
 ## `agentor --version`
 
 Prints the package version.
@@ -52,6 +72,38 @@ Current install targets:
 - Linux: `sudo apt-get install -y tor`
 - Windows: `winget install --id TorProject.TorBrowser -e`
 
+## `agentor test tor`
+
+Checks whether a real proxied browser route works right now.
+
+```bash
+agentor test tor
+agentor test tor --url https://example.com --json
+```
+
+## `agentor demo`
+
+Runs a local no-proxy demo page and writes the usual artifacts so users can inspect the full flow immediately.
+
+## `agentor open <run-dir>`
+
+Opens a run directory in the OS file browser.
+
+## `agentor profile ...`
+
+Save and reuse local defaults:
+
+```bash
+agentor profile add tor-local --proxy socks5://127.0.0.1:9050
+agentor profile list
+agentor profile use tor-local
+agentor profile remove tor-local
+```
+
+## `agentor config show`
+
+Prints the active config file path and saved profiles.
+
 ## Flags
 
 - `--out <dir>`: output directory
@@ -60,5 +112,6 @@ Current install targets:
 - `--timeout <ms>`: navigation timeout
 - `--json`: print receipt JSON to stdout
 - `--install`: attempt Tor installation during `setup tor`
+- `--profile <name>`: use a saved local profile
 
 If proxy routing fails, the CLI tells you to start Tor, provide `--proxy`, or retry with `--no-proxy`.

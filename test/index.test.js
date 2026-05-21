@@ -5,23 +5,31 @@ import os from "node:os";
 import path from "node:path";
 import {
   buildReport,
+  buildSummary,
+  DEFAULT_PROXY,
   formatRuntimeError,
+  getConfigPath,
   getTorSetupPlan,
   inspectTorSetup,
+  loadConfig,
   makeOutputDir,
   parseArgs,
   parseTimeout,
+  resolveRunOptions,
+  runDoctor,
   runSession,
   setupTor,
+  testTorRoute,
   VERSION
 } from "../src/index.js";
 
 test("parseArgs handles flags and positionals", () => {
-  const parsed = parseArgs(["https://example.com", "--out", "tmp", "--json", "--no-proxy"]);
+  const parsed = parseArgs(["https://example.com", "--out", "tmp", "--json", "--no-proxy", "--install"]);
   assert.deepEqual(parsed._, ["https://example.com"]);
   assert.equal(parsed.flags.out, "tmp");
   assert.equal(parsed.flags.json, true);
   assert.equal(parsed.flags["no-proxy"], true);
+  assert.equal(parsed.flags.install, true);
 });
 
 test("makeOutputDir creates a stable artifact-style path", () => {
@@ -46,6 +54,19 @@ test("buildReport includes title, prompt, and links", () => {
   assert.match(report, /Docs <https:\/\/example.com\/docs>/);
 });
 
+test("buildSummary includes proxy and artifacts", () => {
+  const summary = buildSummary({
+    command: "fetch",
+    url: "https://example.com",
+    title: "Example",
+    proxy: DEFAULT_PROXY,
+    outDir: "/tmp/run",
+    artifacts: { html: "page.html", text: "page.txt", screenshot: null, report: null }
+  });
+  assert.match(summary, /proxied: yes/);
+  assert.match(summary, /artifacts: page.html, page.txt/);
+});
+
 test("parseTimeout validates numeric input", () => {
   assert.equal(parseTimeout(undefined), 30000);
   assert.equal(parseTimeout("1500"), 1500);
@@ -53,7 +74,40 @@ test("parseTimeout validates numeric input", () => {
   assert.throws(() => parseTimeout("0"), /timeout must be a positive number/);
 });
 
-test("runSession writes receipt and artifacts without changing cwd", async () => {
+test("getConfigPath uses XDG-style path on macOS", () => {
+  const configPath = getConfigPath("darwin", "/Users/test");
+  assert.equal(configPath, "/Users/test/.config/agentor/config.json");
+});
+
+test("loadConfig returns empty config when missing", async () => {
+  const missing = path.join(os.tmpdir(), `agentor-missing-${Date.now()}.json`);
+  const config = await loadConfig(missing);
+  assert.deepEqual(config, { defaultProfile: null, profiles: {} });
+});
+
+test("resolveRunOptions merges profile defaults", async () => {
+  const options = await resolveRunOptions({
+    flags: { profile: "tor-local" },
+    config: {
+      defaultProfile: null,
+      profiles: {
+        "tor-local": {
+          proxy: "socks5://10.0.0.1:9050",
+          timeout: 1234,
+          baseDir: "named-runs",
+          useProxy: true
+        }
+      }
+    },
+    command: "fetch"
+  });
+  assert.equal(options.proxy, "socks5://10.0.0.1:9050");
+  assert.equal(options.timeoutMs, 1234);
+  assert.equal(options.baseDir, "named-runs");
+  assert.equal(options.profileName, "tor-local");
+});
+
+test("runSession writes receipt, summary, and artifacts without changing cwd", async () => {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "agentor-test-"));
   const originalCwd = process.cwd();
   const screenshotCalls = [];
@@ -95,6 +149,7 @@ test("runSession writes receipt and artifacts without changing cwd", async () =>
   assert.deepEqual(screenshotCalls, [path.join(tempDir, "screenshot.png")]);
   assert.equal(JSON.parse(await fs.readFile(path.join(tempDir, "receipt.json"), "utf8")).title, "Mock");
   assert.match(await fs.readFile(path.join(tempDir, "report.md"), "utf8"), /Mock description/);
+  assert.match(await fs.readFile(path.join(tempDir, "summary.txt"), "utf8"), /proxied: no/);
 });
 
 test("formatRuntimeError makes proxy failures actionable", () => {
@@ -124,12 +179,10 @@ test("inspectTorSetup reports ready when tor binary and port are available", asy
 });
 
 test("setupTor returns next steps when install is needed", async () => {
-  const seen = [];
   const result = await setupTor({
     install: false,
     platform: "darwin",
     commandRunner: async (command, args = []) => {
-      seen.push([command, ...args].join(" "));
       const joined = [command, ...args].join(" ");
       if (joined === "which brew") {
         return { ok: true, code: 0, stdout: "/opt/homebrew/bin/brew\n", stderr: "", error: null };
@@ -140,5 +193,28 @@ test("setupTor returns next steps when install is needed", async () => {
   });
   assert.equal(result.ready, false);
   assert.match(result.nextSteps.join("\n"), /brew install tor/);
-  assert.ok(seen.some((entry) => entry === "which tor"));
+});
+
+test("runDoctor reports check statuses", async () => {
+  const result = await runDoctor({
+    proxy: "socks5://127.0.0.1:9050",
+    baseDir: path.join(os.tmpdir(), "agentor-doctor"),
+    commandRunner: async () => ({ ok: false, code: 1, stdout: "", stderr: "", error: null }),
+    portChecker: async () => false
+  });
+  assert.equal(result.checks.length, 4);
+  assert.equal(result.checks.find((check) => check.name === "output-dir").ok, true);
+});
+
+test("testTorRoute returns formatted errors", async () => {
+  const result = await testTorRoute({
+    proxy: "socks5://127.0.0.1:9050",
+    browserType: {
+      launch: async () => {
+        throw new Error("page.goto: net::ERR_PROXY_CONNECTION_FAILED at https://example.com/");
+      }
+    }
+  });
+  assert.equal(result.ok, false);
+  assert.match(result.error, /proxy connection failed/);
 });

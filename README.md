@@ -5,10 +5,17 @@
 ## Commands
 
 ```bash
+agentor
+agentor doctor
 agentor fetch <url>
+agentor shot <url>
 agentor screenshot <url>
+agentor research <url> --prompt "research this page"
 agentor run <url> --prompt "research this page"
+agentor test tor
 agentor setup tor --install
+agentor demo
+agentor profile add tor-local --proxy socks5://127.0.0.1:9050
 agentor --version
 ```
 
@@ -20,6 +27,7 @@ Common flags:
 --no-proxy                  Disable proxy usage
 --timeout <ms>              Page timeout, default: 30000
 --json                      Print receipt JSON
+--profile <name>            Use a saved profile
 ```
 
 ## What it writes
@@ -49,6 +57,13 @@ npx @builtbyecho/agentor setup tor
 npx @builtbyecho/agentor setup tor --install
 ```
 
+Persist a local profile:
+
+```bash
+npx @builtbyecho/agentor profile add tor-local --proxy socks5://127.0.0.1:9050
+npx @builtbyecho/agentor profile use tor-local
+```
+
 ## Tor notes
 
 Default proxy is `socks5://127.0.0.1:9050`. If Tor is not running, pass `--no-proxy` for direct browsing or provide another SOCKS/HTTP proxy with `--proxy`.
@@ -56,6 +71,8 @@ Default proxy is `socks5://127.0.0.1:9050`. If Tor is not running, pass `--no-pr
 If the default proxy is unavailable, `agentor` now fails with an actionable message instead of surfacing the raw browser error.
 
 `agentor setup tor` checks whether Tor is installed and whether SOCKS is actually listening. `agentor setup tor --install` can run a platform package-manager install when the platform is recognized and the package manager is available.
+
+`agentor doctor` checks browser availability, Tor binary, SOCKS reachability, and output-dir writability. `agentor demo` runs a local no-proxy sample so users can see the artifact flow immediately.
 
 This is privacy framing and route control, not a promise of anonymity. DNS leaks, login state, downloaded artifacts, and upstream fingerprinting still matter.
 
