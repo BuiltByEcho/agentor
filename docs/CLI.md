@@ -34,6 +34,24 @@ agentor run https://example.com --prompt "research this page"
 
 Prints the package version.
 
+## `agentor setup tor`
+
+Checks whether the `tor` binary exists and whether the SOCKS proxy is reachable.
+
+Examples:
+
+```bash
+agentor setup tor
+agentor setup tor --install
+agentor setup tor --proxy socks5://127.0.0.1:9050 --json
+```
+
+Current install targets:
+
+- macOS: `brew install tor`
+- Linux: `sudo apt-get install -y tor`
+- Windows: `winget install --id TorProject.TorBrowser -e`
+
 ## Flags
 
 - `--out <dir>`: output directory
@@ -41,5 +59,6 @@ Prints the package version.
 - `--no-proxy`: direct browser session
 - `--timeout <ms>`: navigation timeout
 - `--json`: print receipt JSON to stdout
+- `--install`: attempt Tor installation during `setup tor`
 
 If proxy routing fails, the CLI tells you to start Tor, provide `--proxy`, or retry with `--no-proxy`.

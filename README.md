@@ -8,6 +8,7 @@
 agentor fetch <url>
 agentor screenshot <url>
 agentor run <url> --prompt "research this page"
+agentor setup tor --install
 agentor --version
 ```
 
@@ -41,11 +42,20 @@ Or one-shot:
 npx @builtbyecho/agentor fetch https://example.com --json
 ```
 
+Bootstrap Tor:
+
+```bash
+npx @builtbyecho/agentor setup tor
+npx @builtbyecho/agentor setup tor --install
+```
+
 ## Tor notes
 
 Default proxy is `socks5://127.0.0.1:9050`. If Tor is not running, pass `--no-proxy` for direct browsing or provide another SOCKS/HTTP proxy with `--proxy`.
 
 If the default proxy is unavailable, `agentor` now fails with an actionable message instead of surfacing the raw browser error.
+
+`agentor setup tor` checks whether Tor is installed and whether SOCKS is actually listening. `agentor setup tor --install` can run a platform package-manager install when the platform is recognized and the package manager is available.
 
 This is privacy framing and route control, not a promise of anonymity. DNS leaks, login state, downloaded artifacts, and upstream fingerprinting still matter.
 

@@ -1,11 +1,15 @@
 import fs from "node:fs/promises";
+import net from "node:net";
 import path from "node:path";
+import { spawn } from "node:child_process";
 import { chromium } from "playwright-core";
 
 export const VERSION = "0.1.0";
 const DEFAULT_PROXY = "socks5://127.0.0.1:9050";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
+const DEFAULT_PROXY_HOST = "127.0.0.1";
+const DEFAULT_PROXY_PORT = 9050;
 const LOCAL_BROWSER_CANDIDATES = [
   process.env.AGENTOR_BROWSER_PATH,
   "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
@@ -36,6 +40,7 @@ export function parseArgs(argv) {
   const result = {
     flags: {}
   };
+  const booleanFlags = new Set(["json", "no-proxy", "install"]);
   while (args.length > 0) {
     const token = args.shift();
     if (!token.startsWith("--")) {
@@ -43,11 +48,11 @@ export function parseArgs(argv) {
       result._.push(token);
       continue;
     }
-    if (token === "--json" || token === "--no-proxy") {
-      result.flags[token.slice(2)] = true;
+    const key = token.slice(2);
+    if (booleanFlags.has(key)) {
+      result.flags[key] = true;
       continue;
     }
-    const key = token.slice(2);
     const value = args.shift();
     if (value === undefined) {
       throw new Error(`missing value for --${key}`);
@@ -66,6 +71,169 @@ export function parseTimeout(value) {
     throw new Error("timeout must be a positive number of milliseconds");
   }
   return timeoutMs;
+}
+
+function splitProxyAddress(proxy = DEFAULT_PROXY) {
+  const parsed = new URL(proxy);
+  return {
+    host: parsed.hostname || DEFAULT_PROXY_HOST,
+    port: parsed.port ? Number(parsed.port) : DEFAULT_PROXY_PORT
+  };
+}
+
+export function getTorSetupPlan(platform = process.platform) {
+  if (platform === "darwin") {
+    return {
+      platform,
+      packageManager: "brew",
+      installCommand: ["brew", "install", "tor"],
+      startCommands: [
+        "brew services start tor",
+        "tor"
+      ]
+    };
+  }
+  if (platform === "linux") {
+    return {
+      platform,
+      packageManager: "apt",
+      installCommand: ["sudo", "apt-get", "install", "-y", "tor"],
+      startCommands: [
+        "sudo systemctl start tor",
+        "tor"
+      ]
+    };
+  }
+  if (platform === "win32") {
+    return {
+      platform,
+      packageManager: "winget",
+      installCommand: ["winget", "install", "--id", "TorProject.TorBrowser", "-e"],
+      startCommands: [
+        "Start Tor Browser or run the Tor expert bundle so SOCKS is listening on 127.0.0.1:9050"
+      ]
+    };
+  }
+  return {
+    platform,
+    packageManager: null,
+    installCommand: null,
+    startCommands: [
+      "Install Tor manually and expose a SOCKS proxy on 127.0.0.1:9050"
+    ]
+  };
+}
+
+export async function runCommand(command, args = [], options = {}) {
+  return await new Promise((resolve) => {
+    const child = spawn(command, args, {
+      stdio: ["ignore", "pipe", "pipe"],
+      ...options
+    });
+    let stdout = "";
+    let stderr = "";
+    child.stdout?.on("data", (chunk) => {
+      stdout += chunk.toString();
+    });
+    child.stderr?.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      resolve({ ok: false, code: null, stdout, stderr, error });
+    });
+    child.on("close", (code) => {
+      resolve({ ok: code === 0, code, stdout, stderr, error: null });
+    });
+  });
+}
+
+export async function isTcpPortOpen(host, port, timeoutMs = 750) {
+  return await new Promise((resolve) => {
+    const socket = net.createConnection({ host, port });
+    const finish = (value) => {
+      socket.removeAllListeners();
+      socket.destroy();
+      resolve(value);
+    };
+    socket.setTimeout(timeoutMs);
+    socket.once("connect", () => finish(true));
+    socket.once("timeout", () => finish(false));
+    socket.once("error", () => finish(false));
+  });
+}
+
+async function commandExists(command, commandRunner = runCommand) {
+  const probe = process.platform === "win32"
+    ? await commandRunner("where", [command])
+    : await commandRunner("which", [command]);
+  return probe.ok;
+}
+
+export async function inspectTorSetup({
+  proxy = DEFAULT_PROXY,
+  platform = process.platform,
+  commandRunner = runCommand,
+  portChecker = isTcpPortOpen
+} = {}) {
+  const plan = getTorSetupPlan(platform);
+  const { host, port } = splitProxyAddress(proxy);
+  const portOpen = await portChecker(host, port);
+  const torBinary = await commandExists("tor", commandRunner);
+  const packageManagerAvailable = plan.installCommand
+    ? await commandExists(plan.installCommand[0], commandRunner)
+    : false;
+  return {
+    proxy,
+    host,
+    port,
+    platform,
+    torBinary,
+    portOpen,
+    ready: torBinary && portOpen,
+    packageManager: plan.packageManager,
+    packageManagerAvailable,
+    installCommand: plan.installCommand,
+    startCommands: plan.startCommands
+  };
+}
+
+export async function setupTor({
+  install = false,
+  proxy = DEFAULT_PROXY,
+  platform = process.platform,
+  commandRunner = runCommand,
+  portChecker = isTcpPortOpen
+} = {}) {
+  const before = await inspectTorSetup({ proxy, platform, commandRunner, portChecker });
+  let installAttempted = false;
+  let installResult = null;
+  if (!before.ready && install && !before.torBinary && before.installCommand && before.packageManagerAvailable) {
+    installAttempted = true;
+    installResult = await commandRunner(before.installCommand[0], before.installCommand.slice(1), {
+      stdio: ["inherit", "pipe", "pipe"]
+    });
+  }
+  const after = installAttempted
+    ? await inspectTorSetup({ proxy, platform, commandRunner, portChecker })
+    : before;
+  return {
+    ...after,
+    installAttempted,
+    installResult,
+    nextSteps: after.ready
+      ? []
+      : [
+          !after.torBinary
+            ? after.installCommand && after.packageManagerAvailable
+              ? `install Tor with: ${after.installCommand.join(" ")}`
+              : "install Tor manually"
+            : null,
+          after.torBinary && !after.portOpen
+            ? `start Tor so SOCKS is listening on ${after.host}:${after.port}`
+            : null,
+          ...after.startCommands.map((command) => `example: ${command}`)
+        ].filter(Boolean)
+  };
 }
 
 export function formatRuntimeError(error, { useProxy, proxy }) {

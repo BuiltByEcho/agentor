@@ -3,7 +3,18 @@ import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { buildReport, formatRuntimeError, makeOutputDir, parseArgs, parseTimeout, runSession, VERSION } from "../src/index.js";
+import {
+  buildReport,
+  formatRuntimeError,
+  getTorSetupPlan,
+  inspectTorSetup,
+  makeOutputDir,
+  parseArgs,
+  parseTimeout,
+  runSession,
+  setupTor,
+  VERSION
+} from "../src/index.js";
 
 test("parseArgs handles flags and positionals", () => {
   const parsed = parseArgs(["https://example.com", "--out", "tmp", "--json", "--no-proxy"]);
@@ -93,4 +104,41 @@ test("formatRuntimeError makes proxy failures actionable", () => {
   );
   assert.match(message, /Start Tor/);
   assert.match(message, /--no-proxy/);
+});
+
+test("getTorSetupPlan returns brew install flow on macOS", () => {
+  const plan = getTorSetupPlan("darwin");
+  assert.equal(plan.packageManager, "brew");
+  assert.deepEqual(plan.installCommand, ["brew", "install", "tor"]);
+});
+
+test("inspectTorSetup reports ready when tor binary and port are available", async () => {
+  const result = await inspectTorSetup({
+    platform: "darwin",
+    commandRunner: async (command) => ({ ok: command === "which", code: 0, stdout: "", stderr: "", error: null }),
+    portChecker: async () => true
+  });
+  assert.equal(result.ready, true);
+  assert.equal(result.portOpen, true);
+  assert.equal(result.torBinary, true);
+});
+
+test("setupTor returns next steps when install is needed", async () => {
+  const seen = [];
+  const result = await setupTor({
+    install: false,
+    platform: "darwin",
+    commandRunner: async (command, args = []) => {
+      seen.push([command, ...args].join(" "));
+      const joined = [command, ...args].join(" ");
+      if (joined === "which brew") {
+        return { ok: true, code: 0, stdout: "/opt/homebrew/bin/brew\n", stderr: "", error: null };
+      }
+      return { ok: false, code: 1, stdout: "", stderr: "", error: null };
+    },
+    portChecker: async () => false
+  });
+  assert.equal(result.ready, false);
+  assert.match(result.nextSteps.join("\n"), /brew install tor/);
+  assert.ok(seen.some((entry) => entry === "which tor"));
 });

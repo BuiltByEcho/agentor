@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { VERSION, parseArgs, parseTimeout, runSession } from "./index.js";
+import { VERSION, parseArgs, parseTimeout, runSession, setupTor } from "./index.js";
 
 function printUsage() {
   process.stdout.write(
@@ -8,7 +8,8 @@ function printUsage() {
       "Usage:",
       "  agentor fetch <url> [--out <dir>] [--proxy <url>] [--no-proxy] [--timeout <ms>] [--json]",
       "  agentor screenshot <url> [--out <dir>] [--proxy <url>] [--no-proxy] [--timeout <ms>] [--json]",
-      "  agentor run <url> [--prompt <text>] [--out <dir>] [--proxy <url>] [--no-proxy] [--timeout <ms>] [--json]"
+      "  agentor run <url> [--prompt <text>] [--out <dir>] [--proxy <url>] [--no-proxy] [--timeout <ms>] [--json]",
+      "  agentor setup tor [--install] [--proxy <url>] [--json]"
     ].join("\n")
   );
 }
@@ -22,6 +23,32 @@ async function main() {
   if (!command || command === "--help" || command === "-h") {
     printUsage();
     process.exit(command ? 0 : 1);
+  }
+  if (command === "setup") {
+    const [target, ...setupRest] = rest;
+    if (target !== "tor") {
+      throw new Error("usage: agentor setup tor [--install] [--proxy <url>] [--json]");
+    }
+    const parsed = parseArgs(setupRest);
+    const result = await setupTor({
+      install: Boolean(parsed.flags.install),
+      proxy: parsed.flags.proxy
+    });
+    if (parsed.flags.json) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+    if (result.ready) {
+      process.stdout.write(`Tor is ready on ${result.host}:${result.port}\n`);
+      return;
+    }
+    process.stdout.write(
+      [
+        `Tor is not ready on ${result.host}:${result.port}.`,
+        ...result.nextSteps
+      ].join("\n")
+    );
+    return;
   }
   if (!["fetch", "screenshot", "run"].includes(command)) {
     throw new Error(`unknown command: ${command}`);
