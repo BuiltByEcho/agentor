@@ -1,0 +1,54 @@
+{
+  "name": "@builtbyecho/agentor",
+  "version": "0.1.0",
+  "description": "Tor-routed browser sessions for agents with receipts, HTML captures, screenshots, and research runs.",
+  "type": "module",
+  "main": "src/index.js",
+  "exports": {
+    ".": "./src/index.js",
+    "./package.json": "./package.json"
+  },
+  "bin": {
+    "agentor": "src/cli.js"
+  },
+  "files": [
+    "src/",
+    "docs/",
+    "skills/",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "test": "node --test",
+    "smoke": "node src/cli.js fetch 'data:text/html,<html><head><title>agenTOR Smoke</title></head><body><h1>Smoke</h1><p>ok</p></body></html>' --out .agentor-smoke --no-proxy --json",
+    "prepublishOnly": "npm test && npm run smoke"
+  },
+  "keywords": [
+    "ai",
+    "agents",
+    "tor",
+    "browser",
+    "privacy",
+    "receipts",
+    "cli"
+  ],
+  "author": "BuiltByEcho",
+  "license": "MIT",
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "playwright": "^1.54.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/BuiltByEcho/agentor.git"
+  },
+  "bugs": {
+    "url": "https://github.com/BuiltByEcho/agentor/issues"
+  },
+  "homepage": "https://www.builtbyecho.xyz/agentor.html",
+  "publishConfig": {
+    "access": "public"
+  }
+}
