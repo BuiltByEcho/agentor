@@ -1,3 +1,4 @@
 node_modules/
 .agentor-*/
 artifacts/
+*.tgz
