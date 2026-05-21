@@ -8,6 +8,7 @@
 agentor fetch <url>
 agentor screenshot <url>
 agentor run <url> --prompt "research this page"
+agentor --version
 ```
 
 Common flags:
@@ -43,6 +44,8 @@ npx @builtbyecho/agentor fetch https://example.com --json
 ## Tor notes
 
 Default proxy is `socks5://127.0.0.1:9050`. If Tor is not running, pass `--no-proxy` for direct browsing or provide another SOCKS/HTTP proxy with `--proxy`.
+
+If the default proxy is unavailable, `agentor` now fails with an actionable message instead of surfacing the raw browser error.
 
 This is privacy framing and route control, not a promise of anonymity. DNS leaks, login state, downloaded artifacts, and upstream fingerprinting still matter.
 

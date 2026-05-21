@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { chromium } from "playwright";
+import { chromium } from "playwright-core";
 
+export const VERSION = "0.1.0";
 const DEFAULT_PROXY = "socks5://127.0.0.1:9050";
 const DEFAULT_TIMEOUT_MS = 30_000;
 const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
@@ -56,6 +57,28 @@ export function parseArgs(argv) {
   return result;
 }
 
+export function parseTimeout(value) {
+  if (value === undefined) {
+    return DEFAULT_TIMEOUT_MS;
+  }
+  const timeoutMs = Number(value);
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) {
+    throw new Error("timeout must be a positive number of milliseconds");
+  }
+  return timeoutMs;
+}
+
+export function formatRuntimeError(error, { useProxy, proxy }) {
+  const message = error instanceof Error ? error.message : String(error);
+  if (useProxy && /ERR_PROXY_CONNECTION_FAILED|proxy connection failed/i.test(message)) {
+    return `proxy connection failed for ${proxy}. Start Tor on 127.0.0.1:9050, provide --proxy <url>, or retry with --no-proxy.`;
+  }
+  if (/Executable doesn't exist|browserType\.launch/i.test(message)) {
+    return "no compatible browser executable was found. Install Chrome/Chromium or set AGENTOR_BROWSER_PATH.";
+  }
+  return message;
+}
+
 function clip(value, max) {
   return value.length <= max ? value : `${value.slice(0, max - 1)}...`;
 }
@@ -105,7 +128,7 @@ async function writeJson(file, value) {
   await fs.writeFile(file, `${JSON.stringify(value, null, 2)}\n`);
 }
 
-async function capturePage(page, url, mode) {
+async function capturePage(page, url, mode, outDir) {
   await page.goto(url, { waitUntil: "domcontentloaded" });
   const snapshot = await page.evaluate(() => {
     const text = document.body?.innerText || "";
@@ -127,7 +150,7 @@ async function capturePage(page, url, mode) {
     };
   });
   if (mode === "screenshot" || mode === "run") {
-    await page.screenshot({ path: "screenshot.png" });
+    await page.screenshot({ path: path.join(outDir, "screenshot.png") });
   }
   return snapshot;
 }
@@ -139,32 +162,41 @@ export async function runSession({
   proxy = DEFAULT_PROXY,
   useProxy = true,
   timeoutMs = DEFAULT_TIMEOUT_MS,
-  prompt
+  prompt,
+  browserType = chromium
 }) {
   const resolvedOutDir = outDir || makeOutputDir(url);
   await ensureDir(resolvedOutDir);
   const launchOptions = await resolveBrowserLaunchOptions();
-  const browser = await chromium.launch({
-    headless: true,
-    ...launchOptions,
-    proxy: useProxy ? { server: proxy } : undefined
-  });
+  let browser;
+  try {
+    browser = await browserType.launch({
+      headless: true,
+      ...launchOptions,
+      proxy: useProxy ? { server: proxy } : undefined
+    });
+  } catch (error) {
+    throw new Error(formatRuntimeError(error, { useProxy, proxy }));
+  }
   const startedAt = new Date().toISOString();
-  const previousCwd = process.cwd();
-  process.chdir(resolvedOutDir);
   try {
     const context = await browser.newContext({ viewport: DEFAULT_VIEWPORT });
     const page = await context.newPage();
     page.setDefaultTimeout(timeoutMs);
-    const snapshot = await capturePage(page, url, command);
-    await fs.writeFile("page.html", snapshot.html);
-    await fs.writeFile("page.txt", `${snapshot.text.trim()}\n`);
+    let snapshot;
+    try {
+      snapshot = await capturePage(page, url, command, resolvedOutDir);
+    } catch (error) {
+      throw new Error(formatRuntimeError(error, { useProxy, proxy }));
+    }
+    await fs.writeFile(path.join(resolvedOutDir, "page.html"), snapshot.html);
+    await fs.writeFile(path.join(resolvedOutDir, "page.txt"), `${snapshot.text.trim()}\n`);
     if (command === "run") {
-      await fs.writeFile("report.md", `${buildReport({ ...snapshot, url }, prompt)}\n`);
+      await fs.writeFile(path.join(resolvedOutDir, "report.md"), `${buildReport({ ...snapshot, url }, prompt)}\n`);
     }
     const receipt = {
       tool: "agentor",
-      version: "0.1.0",
+      version: VERSION,
       command,
       url,
       prompt: prompt || null,
@@ -186,11 +218,12 @@ export async function runSession({
         bodyChars: snapshot.text.length
       }
     };
-    await writeJson("receipt.json", receipt);
+    await writeJson(path.join(resolvedOutDir, "receipt.json"), receipt);
     await context.close();
     return receipt;
   } finally {
-    process.chdir(previousCwd);
-    await browser.close();
+    if (browser) {
+      await browser.close();
+    }
   }
 }

@@ -30,6 +30,10 @@ Example:
 agentor run https://example.com --prompt "research this page"
 ```
 
+## `agentor --version`
+
+Prints the package version.
+
 ## Flags
 
 - `--out <dir>`: output directory
@@ -37,3 +41,5 @@ agentor run https://example.com --prompt "research this page"
 - `--no-proxy`: direct browser session
 - `--timeout <ms>`: navigation timeout
 - `--json`: print receipt JSON to stdout
+
+If proxy routing fails, the CLI tells you to start Tor, provide `--proxy`, or retry with `--no-proxy`.

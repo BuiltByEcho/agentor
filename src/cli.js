@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
-import { parseArgs, runSession } from "./index.js";
+import { VERSION, parseArgs, parseTimeout, runSession } from "./index.js";
 
 function printUsage() {
   process.stdout.write(
@@ -15,6 +15,10 @@ function printUsage() {
 
 async function main() {
   const [command, ...rest] = process.argv.slice(2);
+  if (command === "--version" || command === "-v") {
+    process.stdout.write(`${VERSION}\n`);
+    return;
+  }
   if (!command || command === "--help" || command === "-h") {
     printUsage();
     process.exit(command ? 0 : 1);
@@ -33,7 +37,7 @@ async function main() {
     outDir: parsed.flags.out,
     proxy: parsed.flags.proxy,
     useProxy: !parsed.flags["no-proxy"],
-    timeoutMs: parsed.flags.timeout ? Number(parsed.flags.timeout) : undefined,
+    timeoutMs: parseTimeout(parsed.flags.timeout),
     prompt: parsed.flags.prompt
   });
   if (parsed.flags.json) {

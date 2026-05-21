@@ -38,7 +38,7 @@
     "node": ">=20"
   },
   "dependencies": {
-    "playwright": "^1.54.2"
+    "playwright-core": "^1.54.2"
   },
   "repository": {
     "type": "git",
