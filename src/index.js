@@ -5,7 +5,7 @@ import path from "node:path";
 import { spawn } from "node:child_process";
 import { chromium } from "playwright-core";
 
-export const VERSION = "0.1.0";
+export const VERSION = "0.1.1";
 export const DEFAULT_PROXY = "socks5://127.0.0.1:9050";
 export const DEFAULT_TIMEOUT_MS = 30_000;
 export const DEFAULT_VIEWPORT = { width: 1440, height: 900 };
@@ -41,7 +41,7 @@ export function getConfigPath(platform = process.platform, homeDir = os.homedir(
     const appData = process.env.APPDATA || path.join(homeDir, "AppData", "Roaming");
     return path.join(appData, "agentor", "config.json");
   }
-  return path.join(homeDir, ".config", "agentor", "config.json");
+  return path.posix.join(homeDir, ".config", "agentor", "config.json");
 }
 
 export async function loadConfig(configPath = getConfigPath()) {
@@ -256,8 +256,8 @@ export async function isTcpPortOpen(host, port, timeoutMs = 750) {
   });
 }
 
-async function commandExists(command, commandRunner = runCommand) {
-  const probe = process.platform === "win32"
+async function commandExists(command, commandRunner = runCommand, platform = process.platform) {
+  const probe = platform === "win32"
     ? await commandRunner("where", [command])
     : await commandRunner("which", [command]);
   return probe.ok;
@@ -309,9 +309,9 @@ export async function inspectTorSetup({
   const plan = getTorSetupPlan(platform);
   const { host, port } = splitProxyAddress(proxy);
   const portOpen = await portChecker(host, port);
-  const torBinary = await commandExists("tor", commandRunner);
+  const torBinary = await commandExists("tor", commandRunner, platform);
   const packageManagerAvailable = plan.installCommand
-    ? await commandExists(plan.installCommand[0], commandRunner)
+    ? await commandExists(plan.installCommand[0], commandRunner, platform)
     : false;
   return {
     proxy,

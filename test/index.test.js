@@ -34,7 +34,7 @@ test("parseArgs handles flags and positionals", () => {
 
 test("makeOutputDir creates a stable artifact-style path", () => {
   const dir = makeOutputDir("https://example.com/path?q=1", "artifacts", new Date("2026-05-20T12:34:56.000Z"));
-  assert.match(dir, /artifacts\/2026-05-20T12-34-56-000Z-example-com-path-q-1$/);
+  assert.match(dir.replaceAll(path.sep, "/"), /artifacts\/2026-05-20T12-34-56-000Z-example-com-path-q-1$/);
 });
 
 test("buildReport includes title, prompt, and links", () => {

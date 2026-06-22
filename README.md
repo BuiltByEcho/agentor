@@ -85,3 +85,7 @@ node --check src/index.js
 npm pack --json --dry-run
 npm publish --dry-run --access public
 ```
+
+## Release Automation
+
+This package is published from GitHub Actions using npm Trusted Publishing with provenance. Releases are built on GitHub-hosted runners and no long-lived npm publish token is required.
